@@ -1,0 +1,226 @@
+
+#include<ilcplex/ilocplex.h>
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <iostream>     
+#include <algorithm>
+#include <vector> 
+#include <ctime>        
+#include <cstdlib>
+#include <initializer_list>
+#include <stack>
+#include <chrono>
+#include <sstream>
+#include <string>
+#include <set>
+
+const double MAX =  1e9;
+
+ILOSTLBEGIN
+
+
+vector<int> randsample (int n, int k) {
+    srand(time(NULL));
+    vector<int> curArray;
+    set<int> curSet;
+    for (int i = 0; i < n; i++) {
+        curArray.push_back(i);
+        curSet.insert(i);
+    }
+    vector<int> sol;
+    for (int i = 0; i < k;i++) {
+        int d = rand() % (n - i);
+        sol.push_back(curArray[d]);
+        curSet.erase(curArray[d]);
+        curArray = {};
+        for (int x : curSet)
+            curArray.push_back(x);
+    }
+    return sol;
+}
+
+
+vector<vector<int>> floyd_warshall(vector<vector<int>> graph, int n) {
+    vector<vector<int>> mat(n);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            mat[i].push_back(graph[i][j]);
+        }
+    }
+    for (int k = 0; k < n; k++) {
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                if (mat[i][k] + mat[k][j] < mat[i][j])
+                    mat[i][j] = mat[i][k] + mat[k][j];
+            }
+        }
+    }
+
+    return mat;
+}
+
+
+int main(int, char**) {
+    IloEnv env;
+    try {
+        IloModel model(env);
+        //citamo podatke (m i n)
+        IloInt n, nEdges, p, check, k, l;
+        
+
+        ifstream data("i50_4.txt");
+        data >> n;
+        data >> nEdges;
+        data >> p;
+        p = n / 16;
+        IloArray<IloNumArray> graph(env, n);
+        for (int i = 0; i < n; i++) {
+            graph[i] = IloNumArray(env, n);
+            for (int j = 0; j < n; j++)
+                graph[i][j] = MAX;
+        }
+        for (int i = 0; i < nEdges; i++) {
+            data >> k;
+            data >> l;
+            k--;
+            l--;
+            data >> graph[k][l];
+        }
+
+        vector<vector<int>> graphVec(n);
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++)
+                graphVec[i].push_back(graph[i][j]);
+        }
+        //definisemo parametre 
+        IloArray<IloNumArray> d(env, n);
+        for (int i = 0; i < n; i++)
+            d[i] = IloNumArray(env, n);
+
+        vector<vector<int>> dVec = floyd_warshall(graphVec, n);
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++)
+                d[i][j] = dVec[i][j];
+        }
+
+        /*for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++)
+                data >> d[i][j];*/
+
+        data >> check;
+
+        if (check == 777)
+            cout << "Podaci su uspesno ucitani." << endl;
+        else
+            cout << "Greska pri ucitavanju podataka." << endl;
+
+        //definisemo promenljive
+        IloArray<IloNumVarArray> x(env, n/2);
+        for (int i = 0; i < n/2; i++) {
+            x[i] = IloNumVarArray(env, n/2, 0, 1, ILOBOOL);
+        }
+
+        IloNumVarArray y(env, n/2, 0, 1, ILOBOOL);
+
+        vector<int> client, facility;
+        client = randsample(n, n / 2);
+        set<int> C;
+        for (int i = 0; i < n / 2; i++)
+            C.insert(client[i]);
+        for (int i = 0; i < n; i++)
+            if (!C.count(i))
+                facility.push_back(i);
+
+        for (int i = 0; i < n / 2; i++)
+            cout << client[i] << " ";
+        cout << endl;
+        for (int i = 0; i < n / 2; i++)
+            cout << facility[i] << " ";
+        cout << endl;
+
+        //Funkcija cilja
+        IloExpr fo(env);
+        for (int i = 0; i < n/2; i++)
+            for (int j = 0; j < n/2; j++)
+                fo += d[client[i]][facility[j]] * x[i][j];
+
+        model.add(IloMaximize(env, fo));
+
+        //ogranicenja
+        IloExpr Expr(env);
+
+        for (int j = 0; j < n/2; j++)
+            Expr += y[j];
+        model.add(Expr == p);
+        Expr.end();
+        Expr = IloExpr(env);
+
+
+
+        for (int j = 0; j < n/2; j++) {
+            for (int i = 0; i < n/2; i++) {
+                Expr = x[i][j] - y[j];
+                model.add(Expr <= 0);
+                Expr.end();
+                Expr = IloExpr(env);
+            }
+        }
+
+        for (int i = 0; i < n/2; i++) {
+            for (int j = 0; j < n/2; j++) {
+                Expr += y[j];
+                for (int k = 0; k < n/2; k++) {
+                    if (d[client[i]][facility[k]] > d[client[i]][facility[j]] ||
+                        (d[client[i]][facility[k]] == d[client[i]][facility[j]] && k > j))
+                        Expr += x[i][k];
+                }
+                model.add(Expr <= 1);
+                Expr.end();
+                Expr = IloExpr(env);
+            }
+        }
+
+        //odavde nadole standardno
+
+        IloCplex cplex(env);
+        //cplex.setOut(env.getNullStream());
+        cplex.extract(model);
+        cplex.setParam(IloCplex::Param::TimeLimit, 7200);
+        cplex.setParam(IloCplex::Param::MIP::Interval, 1); //ispisuje rezultat u svakom
+        //cvoru(zakomentarisi ako ti smeta)
+        //cplex.setParam(IloCplex::HeurFreq, -1);
+        IloNum start = clock();
+
+        if (!cplex.solve()) {
+            env.error() << "Nije moguce resiti :-(" << endl;
+            throw(-1);
+        }
+
+        //ispisi promenljive
+        ofstream izlaz("izlazOPMP.txt");
+        for (int i = 0; i < n/2; i++) {
+            for (int j = 0; j < n/2; j++) {
+                izlaz << cplex.getValue(x[i][j]) << " ";
+            }
+            izlaz << endl;
+        }
+        for (int j = 0; j < n/2; j++) {
+            izlaz << cplex.getValue(y[j]) << " ";
+        }
+        izlaz << endl;
+
+        env.out() << "Status: " << cplex.getStatus() << endl;
+        env.out() << "Vrednost funkcije cilja: " << cplex.getObjValue() << endl;
+        IloNum end = clock();
+        env.out() << "Vreme izvrsavanja: " << cplex.getTime() << endl;
+        env.out() << "Vreme izvrsavanja_clock: " << (double)(end - start) /
+            (double)CLK_TCK << endl;
+        env.out() << "Broj iteracija: " << cplex.getNiterations() << endl;
+        env.out() << "Broj cvorova: " << cplex.getNnodes() << endl;
+    }
+    catch (IloException& ex) {
+        cerr << "Error Cplex: " << ex << endl;
+    }
+}
